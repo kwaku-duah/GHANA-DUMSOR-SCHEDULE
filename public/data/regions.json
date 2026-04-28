@@ -1,0 +1,20 @@
+{
+  "regions": [
+    { "id": "greater-accra",  "name": "Greater Accra" },
+    { "id": "ashanti",        "name": "Ashanti" },
+    { "id": "western",        "name": "Western" },
+    { "id": "central",        "name": "Central" },
+    { "id": "eastern",        "name": "Eastern" },
+    { "id": "volta",          "name": "Volta" },
+    { "id": "northern",       "name": "Northern" },
+    { "id": "upper-east",     "name": "Upper East" },
+    { "id": "upper-west",     "name": "Upper West" },
+    { "id": "bono",           "name": "Bono" },
+    { "id": "bono-east",      "name": "Bono East" },
+    { "id": "ahafo",          "name": "Ahafo" },
+    { "id": "western-north",  "name": "Western North" },
+    { "id": "oti",            "name": "Oti" },
+    { "id": "savannah",       "name": "Savannah" },
+    { "id": "north-east",     "name": "North East" }
+  ]
+}
