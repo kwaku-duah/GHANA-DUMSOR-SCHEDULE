@@ -8,10 +8,79 @@ import SearchBar from "@/components/SearchBar";
 import TimeFilter from "@/components/TimeFilter";
 import TownList from "@/components/TownList";
 import AddTownsModal from "@/components/AddTownsModal";
-import { Region, DaySchedule, TimeSlot } from "@/types";
+import { Region, DaySchedule, TimeSlot, ScheduledTown } from "@/types";
 
 function getTodayDate() {
   return new Date().toISOString().split("T")[0];
+}
+
+const slotMap: Record<string, TimeSlot> = {
+  "12:00am-6:00am": "12am-6am",
+  "6:00am-12:00pm": "6am-12pm",
+  "12:00pm-6:00pm": "12pm-6pm",
+  "6:00pm-12:00am": "6pm-12am",
+};
+
+function normalizeSlot(s: string): TimeSlot {
+  return slotMap[s] ?? (s as TimeSlot);
+}
+
+interface RawSlot {
+  timeSlot: string;
+  towns: string[];
+}
+
+interface RawTownObject {
+  name: string;
+  timeSlot: string;
+}
+
+interface RawSchedule {
+  regionId?: string;
+  date?: string;
+  timeSlot?: string;
+  towns?: string[] | RawTownObject[];
+  slots?: RawSlot[];
+}
+
+function parseSchedule(
+  data: RawSchedule,
+  regionId: string,
+  date: string,
+): DaySchedule {
+  let towns: ScheduledTown[];
+
+  if (data.slots && data.slots.length > 0) {
+    // Multi-slot format: { slots: [{ timeSlot, towns: string[] }] }
+    towns = data.slots.flatMap((slot: RawSlot) =>
+      slot.towns.map((name: string) => ({
+        name,
+        timeSlot: normalizeSlot(slot.timeSlot),
+      })),
+    );
+  } else if (
+    Array.isArray(data.towns) &&
+    data.towns.length > 0 &&
+    typeof data.towns[0] === "string"
+  ) {
+    // Legacy flat format: { timeSlot: string, towns: string[] }
+    towns = (data.towns as string[]).map((name) => ({
+      name,
+      timeSlot: normalizeSlot(data.timeSlot ?? ""),
+    }));
+  } else {
+    // Object format: { towns: [{ name, timeSlot }] }
+    towns = ((data.towns ?? []) as RawTownObject[]).map((t) => ({
+      name: t.name,
+      timeSlot: normalizeSlot(t.timeSlot),
+    }));
+  }
+
+  return {
+    regionId: data.regionId ?? regionId,
+    date: data.date ?? date,
+    towns,
+  };
 }
 
 export default function RegionPage() {
@@ -22,73 +91,63 @@ export default function RegionPage() {
     (r) => r.id === regionId,
   );
 
+  const today = getTodayDate();
+  const [selectedDate, setSelectedDate] = useState(today);
   const [schedule, setSchedule] = useState<DaySchedule | null>(null);
   const [search, setSearch] = useState("");
   const [timeSlot, setTimeSlot] = useState<TimeSlot | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const [selectedDate, setSelectedDate] = useState(getTodayDate());
-  const today = getTodayDate();
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!regionId) return;
-    setLoading(true);
 
-    try {
-      const stored = localStorage.getItem(
-        `schedule_${regionId}_${selectedDate}`,
-      );
-      if (stored) {
-        setSchedule(JSON.parse(stored));
-        setLoading(false);
+    let cancelled = false;
+
+    async function loadSchedule() {
+      setSchedule(null);
+
+      const cached = await Promise.resolve().then(() => {
+        try {
+          const stored = localStorage.getItem(
+            `schedule_${regionId}_${selectedDate}`,
+          );
+          return stored ? (JSON.parse(stored) as DaySchedule) : null;
+        } catch {
+          return null;
+        }
+      });
+
+      if (cancelled) return;
+
+      if (cached) {
+        setSchedule(cached);
         return;
       }
-    } catch (_) {}
 
-    fetch(`/data/schedules/${regionId}/${selectedDate}.json`)
-      .then((r) => {
+      setLoading(true);
+
+      try {
+        const r = await fetch(
+          `/data/schedules/${regionId}/${selectedDate}.json`,
+        );
         if (!r.ok) throw new Error("not found");
-        return r.json();
-      })
-      .then((data) => {
-        // Normalize verbose timeSlot strings like "12:00pm-6:00pm" → "12pm-6pm"
-        const slotMap: Record<string, TimeSlot> = {
-          "12:00am-6:00am": "12am-6am",
-          "6:00am-12:00pm": "6am-12pm",
-          "12:00pm-6:00pm": "12pm-6pm",
-          "6:00pm-12:00am": "6pm-12am",
-        };
-        const normalizeSlot = (s: string): TimeSlot =>
-          slotMap[s] ?? (s as TimeSlot);
+        const data = (await r.json()) as RawSchedule;
+        if (!cancelled)
+          setSchedule(parseSchedule(data, regionId, selectedDate));
+      } catch {
+        if (!cancelled)
+          setSchedule({ regionId, date: selectedDate, towns: [] });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
 
-        let normalized: DaySchedule;
-        if (data.towns.length > 0 && typeof data.towns[0] === "string") {
-          normalized = {
-            regionId: data.regionId,
-            date: data.date,
-            towns: (data.towns as string[]).map((name) => ({
-              name,
-              timeSlot: normalizeSlot(data.timeSlot),
-            })),
-          };
-        } else {
-          normalized = {
-            ...data,
-            towns: (data.towns as { name: string; timeSlot: string }[]).map(
-              (t) => ({
-                name: t.name,
-                timeSlot: normalizeSlot(t.timeSlot),
-              }),
-            ),
-          };
-        }
-        setSchedule(normalized);
-      })
-      .catch(() => {
-        setSchedule({ regionId, date: selectedDate, towns: [] });
-      })
-      .finally(() => setLoading(false));
+    loadSchedule();
+
+    return () => {
+      cancelled = true;
+    };
   }, [regionId, selectedDate]);
 
   const handleSaveTowns = (
@@ -105,8 +164,21 @@ export default function RegionPage() {
         `schedule_${regionId}_${selectedDate}`,
         JSON.stringify(updated),
       );
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_) {}
     setShowAddModal(false);
+  };
+
+  const goToPrevDay = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() - 1);
+    setSelectedDate(d.toISOString().split("T")[0]);
+  };
+
+  const goToNextDay = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() + 1);
+    setSelectedDate(d.toISOString().split("T")[0]);
   };
 
   if (!regionId) return null;
@@ -142,11 +214,7 @@ export default function RegionPage() {
             <p className="text-sm text-gray-400 mt-1">Load shedding schedule</p>
             <div className="flex items-center gap-2 mt-2">
               <button
-                onClick={() => {
-                  const d = new Date(selectedDate);
-                  d.setDate(d.getDate() - 1);
-                  setSelectedDate(d.toISOString().split("T")[0]);
-                }}
+                onClick={goToPrevDay}
                 className="px-2 py-1 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors"
               >
                 ← Prev
@@ -155,24 +223,13 @@ export default function RegionPage() {
                 {selectedDate}
               </span>
               <button
-                onClick={() => {
-                  const d = new Date(selectedDate);
-                  d.setDate(d.getDate() + 1);
-                  setSelectedDate(d.toISOString().split("T")[0]);
-                }}
-                disabled={selectedDate >= today}
-                className="px-2 py-1 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                onClick={goToNextDay}
+                className="px-2 py-1 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors"
               >
                 Next →
               </button>
             </div>
           </div>
-          {/* <button
-            onClick={() => setShowAddModal(true)}
-            className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors shadow-sm"
-          >
-            + Add Towns
-          </button> */}
         </div>
 
         <div className="mb-4">
@@ -198,10 +255,10 @@ export default function RegionPage() {
         ) : (
           <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center text-gray-400">
             <p className="text-2xl mb-2">📋</p>
-            <p className="font-medium">No schedule for today yet</p>
+            <p className="font-medium">No schedule for this date yet</p>
             <p className="text-sm mt-1">
-              Use &quot;+ Add Towns&quot; to add load shedding info for{" "}
-              {region.name}
+              No load shedding data available for {region.name} on{" "}
+              {selectedDate}.
             </p>
           </div>
         )}

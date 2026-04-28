@@ -1,0 +1,11 @@
+{
+  "regionId": "western",
+  "date": "2026-04-28",
+  "slots": [
+    { "timeSlot": "6am-12pm", "towns": ["Takoradi", "Fijai"] },
+    { "timeSlot": "12pm-6pm", "towns": ["Apremdo", "Anaji"] },
+    { "timeSlot": "6pm-12am", "towns": ["Agona", "Shama"] },
+    { "timeSlot": "12am-6am", "towns": ["Agona", "Shama"] }
+
+  ]
+}
